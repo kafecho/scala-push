@@ -1,0 +1,6 @@
+<subscriptions>
+	<feed description="My blog" url="http://kafecho.blogspot.com/feeds/posts/default"/>
+	<feed description="Google News Alert on Cloud Computing" url="http://www.google.com/alerts/feeds/05268996354213702508/10841685770671385869"/>
+	<feed description="Amazon EC2" url="http://www.google.com/alerts/feeds/05268996354213702508/12315551699116303915"/>
+	<feed description="My shared Google reader items" url="http://www.google.com/reader/public/atom/user%2F05268996354213702508%2Fstate%2Fcom.google%2Fbroadcast"/>
+</subscriptions>
