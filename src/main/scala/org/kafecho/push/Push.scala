@@ -24,7 +24,7 @@ trait Logging{
 }
 
 /**
- * A Scala singleton object which contains useful constants.
+ * A Scala singleton object with useful constants.
  */
 object Constants{
     val callback= "hub.callback"
@@ -110,7 +110,7 @@ class SubscriberRestlet extends Restlet with Logging{
  * The list is specified in an xml config file.
  * 
 */
-class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) extends Logging{
+class Subscriber(val hostname:String, val port : Int,val doSubscribe : Boolean) extends Logging{
 
   val httpClient = new Client(Protocol.HTTP);
   val pushRoute		= "push"
@@ -125,9 +125,9 @@ class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) ex
   root.getDefaultHost.attach("/" + pushRoute + "/{ID}",restlet)
   root.start
 
-  subscribeTopics(subscribe)
+  loadConfig(doSubscribe)
   
-  def subscribeTopics(flag : Boolean ){
+  def loadConfig(flag : Boolean ){
   	val config = XML.loadFile(configFile)
 	(config\"feed").foreach( t => subUnsub( ( t \"@url").text,flag ))
   }
@@ -140,7 +140,8 @@ class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) ex
     val response = httpClient.handle(new Request( Method.GET,atomURL))
     if (response.getStatus.isSuccess){
       val xml = XML.load (response.getEntity.getStream)
-      val nodes = List("hub","self").map (v => (xml\"link").find ( link => link\"@rel" == v)) 
+      // Find link nodes containing a hub URL and a topic URL
+      val nodes = List("hub","self").map (v => xml \"link" find ( _\"@rel" == v)) 
       (nodes) match {
         case List(Some(hubNode),Some(selfNode)) => Some((hubNode\"@href").toString,(selfNode\"@href").toString)
         case _ => None
@@ -151,7 +152,11 @@ class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) ex
   
   def subscribe (atomURL : String) = subUnsub(atomURL,   true  )
   def unsubscribe (atomURL : String) = subUnsub(atomURL, false )
-    
+   
+  /**
+   * Subscribe or unsubscribe to a feed. 
+   * Will complain if the feed is not PuSH enabled.
+   */
   def subUnsub (atomURL : String, flag : Boolean){
      discover(atomURL) match{
       case Some((hubURL,topicURL)) =>{
@@ -162,8 +167,8 @@ class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) ex
 		  form.add(Constants.mode, mode )
 		  form.add(Constants.callback,callbackURL + "/" + topicURL.hashCode )
 		  form.add(Constants.verify,Constants.sync)
-       
-   		  val response  = httpClient.handle(new Request(Method.POST,hubURL,form.getWebRepresentation))
+
+		  val response  = httpClient.handle(new Request(Method.POST,hubURL,form.getWebRepresentation))
 		  if (!response.getStatus.isSuccess) log.error("Unable to " + mode + " to topic " + topicURL + ", HTTP status: " + response.getStatus.toString)
 		}
       case None => log.error("Unable to fetch the hub or topic URL from the feed " + atomURL)
@@ -171,6 +176,9 @@ class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) ex
   }
 }
 
+/**
+ * Main.
+ */
 object Main {
 	def main ( args: Array[String]) : Unit = {
 	  if (args.length != 3){
