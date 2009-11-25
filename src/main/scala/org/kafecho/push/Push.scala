@@ -95,6 +95,7 @@ class SubscriberRestlet extends Restlet with Logging{
 		val Some(topicNode) = (atom\"link").find( _\"@rel" == "self")
 		println (RFC3339.parse((atom\"updated").text) + " --- Update from: " + (atom\"title").text )
 		println ("Topic URL: " + topicNode\"@href" + "\n")
+  
 		(atom\"entry").foreach{ e=>
 			val link = (e\"link").find( _\"@rel" == "alternate").get\"@href"
 			val entryTitle = (e\"title").text
