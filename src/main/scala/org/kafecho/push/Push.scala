@@ -64,8 +64,12 @@ class SubscriberRestlet extends Restlet with Logging{
 	 */
 	def doGET(request: Request, response:Response){
 	  	val params = request.getResourceRef.getQueryAsForm
+	  	val mode = params.getFirstValue(Constants.mode)
+	  	val topic= params.getFirstValue(Constants.topic)
+	  	val lease_seconds = params.getFirstValue(Constants.lease_seconds).toInt
+	  	log.info("Received hub challenge:\n-Mode: " + mode + "\n-Topic: " + topic + "\n-Lease: " + lease_seconds + " seconds")
 		response.setEntity(params.getFirstValue(Constants.challenge),MediaType.TEXT_PLAIN)
-		log.info("Acknowledged challenge from the hub.")
+		log.info("Acknowledged hub challenge.")
 	}
 
 	/*
@@ -88,7 +92,9 @@ class SubscriberRestlet extends Restlet with Logging{
 	* Extract some useful info from a post for display on the screen.	 	
 	*/
 	def processPost(atom : Elem){
+		val Some(topicNode) = (atom\"link").find( _\"@rel" == "self")
 		println (RFC3339.parse((atom\"updated").text) + " --- Update from: " + (atom\"title").text )
+		println ("Topic URL: " + topicNode\"@href" + "\n")
 		(atom\"entry").foreach{ e=>
 			val link = (e\"link").find( _\"@rel" == "alternate").get\"@href"
 			val entryTitle = (e\"title").text
@@ -155,8 +161,8 @@ class Subscriber(val hostname:String, val port : Int,val subscribe : Boolean) ex
 		  form.add(Constants.mode, mode )
 		  form.add(Constants.callback,callbackURL + "/" + topicURL.hashCode )
 		  form.add(Constants.verify,Constants.sync)
-
-		  val response  = httpClient.handle(new Request(Method.POST,hubURL,form.getWebRepresentation))
+       
+   		  val response  = httpClient.handle(new Request(Method.POST,hubURL,form.getWebRepresentation))
 		  if (!response.getStatus.isSuccess) log.error("Unable to " + mode + " to topic " + topicURL + ", HTTP status: " + response.getStatus.toString)
 		}
       case None => log.error("Unable to fetch the hub or topic URL from the feed " + atomURL)
