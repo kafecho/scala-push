@@ -1,0 +1,1 @@
+java -cp "..//lib/*" org.kafecho.push.Main $1 $2
