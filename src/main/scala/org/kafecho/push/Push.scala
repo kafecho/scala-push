@@ -2,26 +2,12 @@ package org.kafecho.push
 
 import scala.xml.XML
 import scala.xml.Elem
-import scala.collection.mutable.Map
 
-import java.text.SimpleDateFormat
 
-import org.apache.commons.logging.{Log,LogFactory}
 import org.restlet.{Client,Component,Restlet};
 import org.restlet.data._
 
-/**
- * A simple client for the PubSubHubBub protocol.
- * Complies to the specs http://pubsubhubbub.googlecode.com/svn/trunk/pubsubhubbub-core-0.2.html
- * Author: Guillaume Belrose
- */
-
-/**
- * A logging trait that adds Apache commons logging support to all classes which mix it in. 
- */
-trait Logging{
-  val log = LogFactory.getLog(getClass)
-}
+import java.io.FileNotFoundException
 
 /**
  * A Scala singleton object with useful constants.
@@ -41,96 +27,53 @@ object Constants{
     val challenge = "hub.challenge"
 }
 
-/*
- * A Scala singleton object that can parse dates used by the Atom format. 
-*/
-object RFC3339 extends SimpleDateFormat("yyyy-MM-dd'T'h:m:ss")
-
 /**
- * A Restlet that handles GET and POST requests from a hub.
+ * Class representing a subscription to a PuSH enabled feed.
  */
-class SubscriberRestlet extends Restlet with Logging{
-	
-	override def handle(request : Request, response : Response){
-		log.info("Incoming request: " + request.getResourceRef)
-		if (request.getMethod == Method.GET) doGET(request,response)
-		else if (request.getMethod == Method.POST) doPOST(request, response)
-		else response.setStatus(Status.CLIENT_ERROR_METHOD_NOT_ALLOWED,"Method not supported:" + request.getMethod.getDescription)
-	}
-
-	/**
-	 * Handle subscribe / unsubscribe challenges from a hub.
-	 * TODO: add checks to ensure subscriber does not blindly accept challenges from hub.	 
-	 */
-	def doGET(request: Request, response:Response){
-	  	val params = request.getResourceRef.getQueryAsForm
-	  	val mode = params.getFirstValue(Constants.mode)
-	  	val topic= params.getFirstValue(Constants.topic)
-	  	val lease_seconds = params.getFirstValue(Constants.lease_seconds).toInt
-	  	log.info("Received hub challenge:\n-Mode: " + mode + "\n-Topic: " + topic + "\n-Lease: " + lease_seconds + " seconds")
-		response.setEntity(params.getFirstValue(Constants.challenge),MediaType.TEXT_PLAIN)
-		log.info("Acknowledged hub challenge.")
-	}
-
-	/*
-	 * Handle content notifications from a hub.
-	 */
-	def  doPOST(request: Request,response:Response){
-		val entity = request.getEntity
-		if (entity.getMediaType == MediaType.APPLICATION_ATOM_XML){
-			response.setStatus (Status.SUCCESS_OK)
-			val atom = XML.load(entity.getStream)
-			processPost(atom)
-		}
-		else{
-			response.setStatus (Status.CLIENT_ERROR_UNSUPPORTED_MEDIA_TYPE)
-   			log.error("Received hub notification containing unsupported payload of type " + entity.getMediaType + "\n" + entity.getText)
-		}
-	}
- 
-	/*
-	* Extract some useful info from a post for display on the screen.	 	
-	*/
-	def processPost(atom : Elem){
-		val Some(topicNode) = (atom\"link").find( _\"@rel" == "self")
-		println (RFC3339.parse((atom\"updated").text) + " --- Update from: " + (atom\"title").text )
-		println ("Topic URL: " + topicNode\"@href" + "\n")
-  
-		(atom\"entry").foreach{ e=>
-			val link = (e\"link").find( _\"@rel" == "alternate").get\"@href"
-			val entryTitle = (e\"title").text
-			val entryPublished = (e\"published").text
-			println (entryTitle + " (published " + RFC3339.parse(entryPublished) + ")\n" + link + "\n")
-		}
-	}
+class Subscription(val feedURL : String, val topicURL : String, val hubURL : String){
+  val id : Int = feedURL.hashCode
+  override def toString = "Feed URL: " + feedURL + ", topic URL: " + topicURL + ", Hub URL: " + hubURL +"." 
+  def toXML = <feed id={id.toString} feedURL={feedURL} topicURL={topicURL} hubURL={hubURL} />
 }
 
 /*
- * Main class to subscribe / unsubscribe to a list of topics.
- * The list is specified in an xml config file.
- * 
+ * Class which implements a PuSH subscriber.
+ * For this to work, the host on which the subscriber is running must be recheable from the Internet.
 */
-class Subscriber(val hostname:String, val port : Int,val doSubscribe : Boolean) extends Logging{
+class Subscriber(val hostname:String, val port : Int) extends Logging{
 
   val httpClient = new Client(Protocol.HTTP);
   val pushRoute		= "push"
+  val adminRoute 	= "admin"
   val callbackURL   = "http://" + hostname + ":" + port + "/" + pushRoute 
-  val restlet 		= new SubscriberRestlet
-  val configFile    = "config.xml"
+  val pushRestlet 		= new PuSHRestlet(this)
+  val adminRestlet 		= new AdminRestlet(this)
+  val configFile	    = "feeds.xml"
+
+  var pendingSubscriptions : Set[Subscription] = Set()
+  var activeSubscriptions : Set[Subscription] = Set()
   
   val root : Component = new Component  
   root.getLogService.setEnabled(false)
   
   root.getServers.add(Protocol.HTTP, port)
-  root.getDefaultHost.attach("/" + pushRoute + "/{ID}",restlet)
+  
+  root.getDefaultHost.attach("/" + pushRoute + "/{ID}",pushRestlet)
+  root.getDefaultHost.attach("/" + adminRoute + "/{ID}",adminRestlet)
+  root.getDefaultHost.attach("/" + adminRoute + "/",adminRestlet)
+
   root.start
 
-  loadConfig(doSubscribe)
+  loadConfig
   
-  def loadConfig(flag : Boolean ){
-  	val config = XML.loadFile(configFile)
-	(config\"feed").foreach( t => subUnsub( ( t \"@url").text,flag ))
-  }
+  def loadConfig{
+    try{
+    	val config = XML.loadFile(configFile)
+    	(config\"feed").foreach{t => subUnsub( ( t \"@feedURL").text,true) }
+    }catch{
+      case ex: FileNotFoundException => 
+    }
+ }
 
   /**
    * Retrieve and parse the Atom feed to subscribe to. 
@@ -141,52 +84,83 @@ class Subscriber(val hostname:String, val port : Int,val doSubscribe : Boolean) 
     if (response.getStatus.isSuccess){
       val xml = XML.load (response.getEntity.getStream)
       // Find link nodes containing a hub URL and a topic URL
-      val nodes = List("hub","self").map (v => xml \"link" find ( _\"@rel" == v)) 
+      val nodes = List("self","hub").map (v => xml \"link" find ( _\"@rel" == v)) 
       (nodes) match {
-        case List(Some(hubNode),Some(selfNode)) => Some((hubNode\"@href").toString,(selfNode\"@href").toString)
+        case List(Some(selfNode),Some(hubNode)) => Some( selfNode \ "@href" text, hubNode \ "@href" text)
         case _ => None
       }
     }
     else None
   }
   
-  def subscribe (atomURL : String) = subUnsub(atomURL,   true  )
-  def unsubscribe (atomURL : String) = subUnsub(atomURL, false )
+  
+  /**
+   * Subscribe or unsubscribe to a PuSH enabled feed. 
+   */
+  def subUnsub(feedURL : String, topicURL : String, hubURL : String, flag : Boolean){
+	  log.info("Topic: " + topicURL + ", subscribe? " + flag)
+
+	  val s = new Subscription(feedURL, topicURL, hubURL)
+	  pendingSubscriptions = pendingSubscriptions + s
    
+	  val form = new Form
+	  val mode = if (flag) Constants.subscribe else Constants.unsubscribe
+	  form.add(Constants.topic,topicURL)
+	  form.add(Constants.mode, mode )
+	  form.add(Constants.callback,callbackURL + "/" + s.id )
+	  form.add(Constants.verify,Constants.sync)
+	  val response  = httpClient.handle(new Request(Method.POST,hubURL,form.getWebRepresentation))
+	  if (!response.getStatus.isSuccess) log.error("Unable to " + mode + " to topic " + topicURL + ", HTTP status: " + response.getStatus.toString)
+  }
+
   /**
    * Subscribe or unsubscribe to a feed. 
    * Will complain if the feed is not PuSH enabled.
    */
-  def subUnsub (atomURL : String, flag : Boolean){
-     discover(atomURL) match{
-      case Some((hubURL,topicURL)) =>{
-    	  log.info("Topic: " + topicURL + ", subscribe? " + flag)
-    	  val form = new Form
-		  val mode = if (flag) Constants.subscribe else Constants.unsubscribe
-		  form.add(Constants.topic,topicURL)
-		  form.add(Constants.mode, mode )
-		  form.add(Constants.callback,callbackURL + "/" + topicURL.hashCode )
-		  form.add(Constants.verify,Constants.sync)
-
-		  val response  = httpClient.handle(new Request(Method.POST,hubURL,form.getWebRepresentation))
-		  if (!response.getStatus.isSuccess) log.error("Unable to " + mode + " to topic " + topicURL + ", HTTP status: " + response.getStatus.toString)
-		}
-      case None => log.error("Unable to fetch the hub or topic URL from the feed " + atomURL)
+  def subUnsub (feedURL : String, flag : Boolean){
+     discover(feedURL) match{
+      case Some((topicURL,hubURL)) => subUnsub(feedURL,topicURL,hubURL,flag)
+      case None => log.error("Unable to fetch the hub or topic URL from the feed " + feedURL)
 	}
   }
-}
+  
+  /**
+   * Notification that a hub has accepted a request to subscribe to a feed.
+   */
+  def added (topicURL : String){
+	  val found = pendingSubscriptions.find (_.topicURL == topicURL)
+	  found match{
+	    case Some(subscription) => activeSubscriptions = activeSubscriptions + subscription
+	    case _ => log.error("Unable to find a subscription that matches " + topicURL)
+	  }
+	  saveSubscriptions
+  }
+
+  /**
+   * Notification that a hub has accepted a request to unsubscribe from a feed.
+   */
+  def removed (topicURL : String){
+	  activeSubscriptions = activeSubscriptions.filter( _.topicURL != topicURL)
+	  saveSubscriptions
+  }
+  def saveSubscriptions : Unit = XML.saveFull(configFile, subscriptionsToXML , "UTF-8",true, null)
+  
+  def subscriptionsToXML= <feeds>{activeSubscriptions.map(_.toXML)}</feeds>
+}	
 
 /**
  * Main.
  */
 object Main {
 	def main ( args: Array[String]) : Unit = {
-	  if (args.length != 3){
-		System.err.println("Please specify a hostname, a port number and true/false to subscribe/unsubscribe to/from the feeds.")  
+	  if (args.length != 2){
+		System.err.println("Please specify a hostname and a port number.")  
 	    exit(-1)
 	  }else{
 		System.setProperty("java.util.logging.config.file","log.properties")
-		new Subscriber(args(0), args(1).toInt, args(2).toBoolean)
+		new Subscriber(args(0), args(1).toInt)
+		println ("Subscriber client is up.")
+		println ("HTTP admin interface running @ http://" + args(0) +":" + args(1) + "/admin/")
 	  } 
 	}
 }
