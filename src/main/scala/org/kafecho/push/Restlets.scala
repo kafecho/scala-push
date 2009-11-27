@@ -11,7 +11,7 @@ import org.restlet.{Client,Component,Restlet};
 import org.restlet.data._
 import java.text.SimpleDateFormat
 
-import scala.xml.XML
+import scala.xml.{XML,PrettyPrinter}
 import scala.xml.Elem
 
 /*
@@ -25,20 +25,28 @@ object RFC3339 extends SimpleDateFormat("yyyy-MM-dd'T'h:m:ss")
  * This restlet mixes in the traits corresponding to the HTTP methods it supports and the dispatch logic is handled by each of the trait.
  */
 class AdminRestlet (val subscriber : Subscriber ) extends Default with Logging with POST with GET with DELETE{
+    val xmlPrinter 	= new PrettyPrinter(100,2)
+
 	def doPOST(request : Request, response : Response){
 		val id = request.getAttributes.get("ID")
 		if (id != null){
 		  response.setStatus(Status.CLIENT_ERROR_METHOD_NOT_ALLOWED)
 		  return
 		}
-		if (request.getEntity.getMediaType != MediaType.TEXT_XML){
-		  response.setStatus(Status.CLIENT_ERROR_NOT_ACCEPTABLE,"Please provide some XML.")
+		
+		if (request.getEntity.getMediaType != MediaType.APPLICATION_WWW_FORM){
+		  log.error("Invalid MIME type: " + request.getEntity.getMediaType)
+		  response.setStatus(Status.CLIENT_ERROR_METHOD_NOT_ALLOWED)
 		  return
 		}
-		
-		val xml = XML.loadString(request.getEntity.getText)
-		subscriber.subUnsub(xml \ "@feedURL" text , true)
-	}
+		val form = request.getEntityAsForm
+		val feedURL = form.getFirstValue("feedURL")
+		if (feedURL != null){
+			subscriber.subUnsub(feedURL , true)
+			response.setEntity("Creating subscription for feed: " + feedURL,MediaType.TEXT_PLAIN)
+			response.setStatus(Status.SUCCESS_ACCEPTED)
+		}
+}
 	
 	def doDELETE(request : Request, response : Response){
 		val id = request.getAttributes.get("ID")
@@ -48,7 +56,8 @@ class AdminRestlet (val subscriber : Subscriber ) extends Default with Logging w
 		  found match{
 		    case Some(subscription) =>
 		    	subscriber.subUnsub(subscription.feedURL,subscription.topicURL,subscription.hubURL,false)
-		    	response.setStatus(Status.SUCCESS_OK,"Created a new subscription for feed: " + subscription.feedURL)
+       			response.setEntity("Removing subscription for feed: " +  subscription.feedURL, MediaType.TEXT_PLAIN)
+       			response.setStatus(Status.SUCCESS_ACCEPTED)
 		    case None => response.setStatus(Status.CLIENT_ERROR_NOT_FOUND)	
 		  }
 		}
@@ -58,7 +67,7 @@ class AdminRestlet (val subscriber : Subscriber ) extends Default with Logging w
 		if (id != null){
 		  val found = subscriber.activeSubscriptions.find( _.id.toString == id)
 		  found match{
-		    case Some(subscription) => response.setEntity(subscription.toXML.toString, MediaType.TEXT_XML)
+		    case Some(subscription) => response.setEntity(xmlPrinter.format(subscription.toXML), MediaType.TEXT_XML)
 		    case None => response.setStatus(Status.CLIENT_ERROR_NOT_FOUND)	
 		  }
 		}

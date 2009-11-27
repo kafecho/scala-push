@@ -41,7 +41,7 @@ object Constants{
 class Subscription(val feedURL : String, val topicURL : String, val hubURL : String){
   val id : Int = feedURL.hashCode
   override def toString = "Feed URL: " + feedURL + ", topic URL: " + topicURL + ", Hub URL: " + hubURL +"." 
-  def toXML = <feed id={id.toString} feedURL={feedURL} topicURL={topicURL} hubURL={hubURL} />
+  def toXML = <feed><id>{id.toString}</id><feedURL>{feedURL}</feedURL><topicURL>{topicURL}</topicURL><hubURL>{hubURL}</hubURL></feed>
 }
 
 /*
@@ -54,10 +54,9 @@ class Subscriber(val hostname:String, val port : Int) extends Logging{
   val pushRoute		= "push"
   val adminRoute 	= "admin"
   val callbackURL   = "http://" + hostname + ":" + port + "/" + pushRoute 
-  val pushRestlet 		= new PuSHRestlet(this)
-  val adminRestlet 		= new AdminRestlet(this)
-  val configFile	    = "feeds.xml"
-
+  val pushRestlet 	= new PuSHRestlet(this)
+  val adminRestlet 	= new AdminRestlet(this)
+  val configFile	= "feeds.xml"
   var pendingSubscriptions : Set[Subscription] = Set()
   var activeSubscriptions : Set[Subscription] = Set()
   
@@ -77,7 +76,7 @@ class Subscriber(val hostname:String, val port : Int) extends Logging{
   def loadConfig{
     try{
     	val config = XML.loadFile(configFile)
-    	(config\"feed").foreach{t => subUnsub( ( t \"@feedURL").text,true) }
+    	(config\"feed").foreach{t => subUnsub( t \ "feedURL" text ,true) }
     }catch{
       case ex: FileNotFoundException => 
     }
